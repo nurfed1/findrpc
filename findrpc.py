@@ -10,6 +10,9 @@ from json import JSONEncoder
 
 # IDA libraries
 import idaapi
+import ida_bytes
+import ida_search
+import ida_ida
 import idc
 
 from PyQt5 import QtCore, QtWidgets, QtGui
@@ -26,9 +29,9 @@ else:
 
 
 # we can't use ctypes.c_voidp since it rely on Python engine's arch, not the curent PE arch.
-POINTER = ( ctypes.c_uint32, ctypes.c_uint64 )[idaapi.get_inf_structure().is_64bit()]
+POINTER = ( ctypes.c_uint32, ctypes.c_uint64 )[idaapi.inf_is_64bit()]
 POINTER_SIZE = ctypes.sizeof(POINTER)
-READ_PTR_VALUE = (ida_bytes.get_32bit, ida_bytes.get_64bit) [idaapi.get_inf_structure().is_64bit()]
+READ_PTR_VALUE = (ida_bytes.get_32bit, ida_bytes.get_64bit) [idaapi.inf_is_64bit()]
 
 #################################
 ## ctypes to JSON encoder, copied from https://github.com/rinatz/ctypes_json
@@ -900,7 +903,7 @@ class RpcResultsForm( idaapi.PluginForm ):
             sample_width = self._font_metrics.boundingRect(self._model.__class__.SAMPLE_CONTENTS[i]).width()
             header_width = self._font_metrics.boundingRect(self._model._column_headers[i]).width()
 
-            self._table.setColumnWidth(i, max(header_width, sample_width))
+            self._table.setColumnWidth(i, int(max(header_width, sample_width)))
 
     def _ui_entry_double_click(self, index):
         """
@@ -1244,7 +1247,7 @@ class FindRpcResultsForm( idaapi.PluginForm ):
             sample_width = self._font_metrics.boundingRect(self._model.__class__.SAMPLE_CONTENTS[i]).width()
             header_width = self._font_metrics.boundingRect(self._model._column_headers[i]).width()
 
-            self._table.setColumnWidth(i, max(header_width, sample_width))
+            self._table.setColumnWidth(i, int(max(header_width, sample_width)))
 
 
     def _ui_ctx_menu_handler(self, position):
@@ -2155,7 +2158,8 @@ class FindRpc(object):
         """
         Binary search the RPC_SERVER_INTERFACE.Length marker in R(W) data sections, a la "binwalk"
         """
-        rpc_server_interface_marker = "%02X" % ctypes.sizeof(RPC_SERVER_INTERFACE)
+        # rpc_server_interface_marker = "%02X" % ctypes.sizeof(RPC_SERVER_INTERFACE)
+        rpc_server_interface_marker = ctypes.sizeof(RPC_SERVER_INTERFACE)
 
         for seg in get_data_sections():
             logging.debug ("[findrpc] scanning [%x - %x] %s" % (seg.start_ea, seg.end_ea, idaapi.get_segm_name(seg)))
@@ -2163,8 +2167,14 @@ class FindRpc(object):
             ea = seg.start_ea
             nea = ea
             while True:
+                # ea = idc.find_binary(nea, SEARCH_DOWN, rpc_server_interface_marker)
+                ea = ida_bytes.find_byte(
+                    nea,
+                    seg.end_ea-nea,
+                    rpc_server_interface_marker,
+                    ida_search.SEARCH_DOWN | ida_bytes.BIN_SEARCH_NOBREAK
+                )
 
-                ea = idc.find_binary(nea, SEARCH_DOWN, rpc_server_interface_marker)
                 if (ea == idaapi.BADADDR) or (ea > seg.end_ea):
                     break
 
@@ -2173,7 +2183,7 @@ class FindRpc(object):
                 # Check the whole dword is equal to the marker, not just a byte
                 if ctypes.sizeof(RPC_SERVER_INTERFACE) != ida_bytes.get_dword(ea):
                     continue
-                
+
                 # if there is already a structure applied, and it's not a RPC_SERVER_INTERFACE, keep on going
                 correct_types = ["RPC_SERVER_INTERFACE", "_RPC_SERVER_INTERFACE", "RPC_CLIENT_INTERFACE", "_RPC_CLIENT_INTERFACE"]
                 applied_type = get_structure_name_at_address(ea)
